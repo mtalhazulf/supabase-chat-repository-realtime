@@ -30,23 +30,35 @@ its own conversations, branding, AI configuration, and members.
 
 ## Setup
 
+This demo ships with a public `.env` containing the Supabase URL + `anon` key
+of the demo project (intentional — see the disclaimer in the file). To get
+the visitor widget working you'll need to add a `SUPABASE_SERVICE_ROLE_KEY`
+to a local `.env.local` (gitignored).
+
 ```bash
 bun install
 
-# 1. Configure env
-cp .env.example .env.local
-# Fill in NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
-#         SUPABASE_SERVICE_ROLE_KEY, DATABASE_URL, DIRECT_URL,
-#         OPENROUTER_API_KEY
+# Optional: override secrets in .env.local
+echo "SUPABASE_SERVICE_ROLE_KEY=..." > .env.local
+echo "OPENROUTER_API_KEY=..." >> .env.local
 
-# 2. Push schema and apply RLS/triggers/realtime
-bun run db:setup           # = db:push + db:policies
-
-# 3. Start dev server
 bun run dev
 ```
 
 Visit http://localhost:3000 and sign up.
+
+### Database migrations
+
+Schema is defined in `prisma/schema.prisma`; RLS, triggers, FKs to `auth.users`
+and the realtime publication live in `supabase/sql/policies.sql`.
+
+For the demo, both have already been applied to the live project via the
+Supabase MCP (see `supabase/migrations/` history). For your own project:
+
+```bash
+# Set DATABASE_URL + DIRECT_URL in .env.local first.
+bun run db:setup           # = prisma db push + apply policies.sql
+```
 
 ## Embedding the chatbot
 

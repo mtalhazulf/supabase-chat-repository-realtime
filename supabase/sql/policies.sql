@@ -88,7 +88,10 @@ $$;
 
 -- ---------- triggers ----------
 create or replace function public.touch_conversation()
-returns trigger language plpgsql as $$
+returns trigger
+language plpgsql
+set search_path = public
+as $$
 begin
   update public.conversations
      set last_message_at = new.created_at
@@ -207,6 +210,15 @@ create policy messages_insert_human on public.messages
     and sender = 'human'
     and author_id = auth.uid()
   );
+
+-- =========================================================
+-- Lock down SECURITY DEFINER helpers — used by RLS only,
+-- not intended as REST RPCs.
+-- =========================================================
+revoke execute on function public.is_tenant_member(uuid) from public, anon, authenticated;
+revoke execute on function public.is_tenant_admin(uuid)  from public, anon, authenticated;
+revoke execute on function public.bootstrap_tenant()     from public, anon, authenticated;
+revoke execute on function public.touch_conversation()   from public, anon, authenticated;
 
 -- =========================================================
 -- REALTIME publication

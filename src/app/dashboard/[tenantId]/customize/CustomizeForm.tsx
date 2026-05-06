@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Sparkles, User } from "lucide-react";
 import { cn, getReadableTextColor } from "@/lib/utils";
+import { useUpdateConfig } from "@/lib/queries";
+import { ApiError } from "@/lib/api-client";
 import type { ChatbotConfig } from "@/lib/types";
 
 const MODELS = [
@@ -16,34 +18,23 @@ const MODELS = [
 
 export function CustomizeForm({ initial }: { initial: ChatbotConfig }) {
   const [config, setConfig] = useState<ChatbotConfig>(initial);
-  const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  function update<K extends keyof ChatbotConfig>(key: K, value: ChatbotConfig[K]) {
+  const update = <K extends keyof ChatbotConfig>(key: K, value: ChatbotConfig[K]) =>
     setConfig((c) => ({ ...c, [key]: value }));
-  }
 
-  async function save(e: React.FormEvent) {
+  const mutation = useUpdateConfig(config.tenant_id);
+
+  function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setError(null);
     const { tenant_id, updated_at, ...patch } = config;
+    void tenant_id;
     void updated_at;
-
-    const res = await fetch(`/api/tenants/${tenant_id}/config`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    setSaving(false);
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(data.error ?? "Could not save changes.");
-      return;
-    }
-    setSavedAt(new Date());
+    mutation.mutate(patch, { onSuccess: () => setSavedAt(new Date()) });
   }
+
+  const error = mutation.error instanceof ApiError ? mutation.error.code : null;
+  const saving = mutation.isPending;
 
   return (
     <form onSubmit={save} className="grid gap-6 lg:grid-cols-[1fr_360px]">

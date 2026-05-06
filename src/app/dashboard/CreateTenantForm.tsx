@@ -2,14 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { Tenant } from "@/lib/types";
+import { ApiError } from "@/lib/api-client";
+import { useCreateTenant } from "@/lib/queries";
 
 export function CreateTenantForm() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const create = useCreateTenant();
 
   function deriveSlug(v: string) {
     return v
@@ -21,27 +23,21 @@ export function CreateTenantForm() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
     const finalSlug = slug || deriveSlug(name);
-
-    const res = await fetch("/api/tenants", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, slug: finalSlug }),
-    });
-
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(humanizeError(data.error));
-      return;
-    }
-    const { tenant } = (await res.json()) as { tenant: Tenant };
-
-    startTransition(() => {
-      router.push(`/dashboard/${tenant.id}/conversations`);
-      router.refresh();
-    });
+    create.mutate(
+      { name, slug: finalSlug },
+      {
+        onSuccess: ({ tenant }) =>
+          startTransition(() => {
+            router.push(`/dashboard/${tenant.id}/conversations`);
+            router.refresh();
+          }),
+      },
+    );
   }
+
+  const error = create.error instanceof ApiError ? humanize(create.error.code) : null;
+  const busy = create.isPending || pending;
 
   return (
     <form onSubmit={submit} className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
@@ -64,17 +60,17 @@ export function CreateTenantForm() {
       />
       <button
         type="submit"
-        disabled={pending}
+        disabled={busy}
         className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
       >
-        {pending ? "Creating…" : "Create"}
+        {busy ? "Creating…" : "Create"}
       </button>
       {error && <p className="sm:col-span-3 text-sm text-red-600">{error}</p>}
     </form>
   );
 }
 
-function humanizeError(code?: string) {
+function humanize(code: string) {
   switch (code) {
     case "slug_taken":
       return "That slug is already in use. Try another.";

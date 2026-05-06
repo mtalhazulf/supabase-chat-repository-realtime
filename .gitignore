@@ -4,7 +4,8 @@ tsconfig.tsbuildinfo
 out
 build
 dist
-.env
+# `.env` is intentionally NOT ignored for this demo (see disclaimer in the file).
+# `.env.local` IS ignored so you can override demo values with secrets locally.
 .env*.local
 .vercel
 *.tsbuildinfo

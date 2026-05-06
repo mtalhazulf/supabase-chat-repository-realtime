@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useDeleteTenant, useUpdateTenant } from "@/lib/queries";
+import { ApiError } from "@/lib/api-client";
 import type { Tenant, TenantMember } from "@/lib/types";
 
 export function SettingsForm({
@@ -16,42 +18,39 @@ export function SettingsForm({
   const router = useRouter();
   const [name, setName] = useState(tenant.name);
   const [slug, setSlug] = useState(tenant.slug);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  const update = useUpdateTenant(tenant.id);
+  const remove = useDeleteTenant(tenant.id);
 
   const isOwner = tenant.owner_id === currentUserId;
 
-  async function save(e: React.FormEvent) {
+  function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
-    setError(null);
     setInfo(null);
-
-    const res = await fetch(`/api/tenants/${tenant.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, slug }),
-    });
-    setSaving(false);
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      return setError(data.error === "slug_taken" ? "That slug is already in use." : "Could not save.");
-    }
-    setInfo("Saved.");
-    router.refresh();
+    update.mutate(
+      { name, slug },
+      {
+        onSuccess: () => {
+          setInfo("Saved.");
+          router.refresh();
+        },
+      },
+    );
   }
 
-  async function remove() {
+  function onRemove() {
     if (!confirm("Delete this workspace? This cannot be undone.")) return;
-    const res = await fetch(`/api/tenants/${tenant.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      return setError(data.error ?? "Could not delete.");
-    }
-    router.replace("/dashboard");
-    router.refresh();
+    remove.mutate(undefined, {
+      onSuccess: () => {
+        router.replace("/dashboard");
+        router.refresh();
+      },
+    });
   }
+
+  const updateError = update.error instanceof ApiError ? update.error.code : null;
+  const deleteError = remove.error instanceof ApiError ? remove.error.code : null;
 
   return (
     <div className="space-y-8">
@@ -79,13 +78,17 @@ export function SettingsForm({
         <div className="sm:col-span-2 flex items-center gap-3">
           <button
             type="submit"
-            disabled={saving || !isOwner}
+            disabled={update.isPending || !isOwner}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
           >
-            {saving ? "Saving…" : "Save"}
+            {update.isPending ? "Saving…" : "Save"}
           </button>
           {info && <span className="text-xs text-emerald-600">{info}</span>}
-          {error && <span className="text-xs text-red-600">{error}</span>}
+          {updateError && (
+            <span className="text-xs text-red-600">
+              {updateError === "slug_taken" ? "That slug is already in use." : "Could not save."}
+            </span>
+          )}
         </div>
       </form>
 
@@ -110,11 +113,13 @@ export function SettingsForm({
           <p className="mt-1 text-xs text-red-800">Deleting removes all conversations and messages.</p>
           <button
             type="button"
-            onClick={remove}
-            className="mt-3 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+            onClick={onRemove}
+            disabled={remove.isPending}
+            className="mt-3 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
           >
-            Delete workspace
+            {remove.isPending ? "Deleting…" : "Delete workspace"}
           </button>
+          {deleteError && <p className="mt-2 text-xs text-red-700">{deleteError}</p>}
         </div>
       )}
     </div>

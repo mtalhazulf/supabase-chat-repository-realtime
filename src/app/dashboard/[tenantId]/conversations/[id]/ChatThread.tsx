@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Send, Sparkles, User, UserCircle2 } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { cn, formatTime } from "@/lib/utils";
+import { useAgentSend } from "@/lib/queries";
 import type { Conversation, Message } from "@/lib/types";
 
 export function ChatThread({
@@ -22,8 +23,9 @@ export function ChatThread({
 }) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const send = useAgentSend({ conversationId: conversation.id, tenantId });
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -52,10 +54,11 @@ export function ChatThread({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length]);
 
-  async function send() {
+  function submit() {
     const content = draft.trim();
-    if (!content || sending || !currentUserId) return;
-    setSending(true);
+    if (!content || send.isPending || !currentUserId) return;
+    setDraft("");
+
     const optimistic: Message = {
       id: `tmp-${Date.now()}`,
       conversation_id: conversation.id,
@@ -68,27 +71,12 @@ export function ChatThread({
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
-    setDraft("");
 
-    try {
-      const res = await fetch("/api/agent/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId: conversation.id,
-          tenantId,
-          content,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const { message } = (await res.json()) as { message: Message };
-      setMessages((prev) => prev.map((m) => (m.id === optimistic.id ? message : m)));
-    } catch (err) {
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-      alert(err instanceof Error ? err.message : "Failed to send");
-    } finally {
-      setSending(false);
-    }
+    send.mutate(content, {
+      onSuccess: ({ message }) =>
+        setMessages((prev) => prev.map((m) => (m.id === optimistic.id ? message : m))),
+      onError: () => setMessages((prev) => prev.filter((m) => m.id !== optimistic.id)),
+    });
   }
 
   return (
@@ -136,7 +124,7 @@ export function ChatThread({
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send();
+                submit();
               }
             }}
             placeholder="Reply as agent…"
@@ -144,14 +132,17 @@ export function ChatThread({
             className="flex-1 resize-none rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
           />
           <button
-            onClick={send}
-            disabled={!draft.trim() || sending}
+            onClick={submit}
+            disabled={!draft.trim() || send.isPending}
             className="flex items-center gap-1.5 self-end rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
           >
             <Send className="h-4 w-4" />
-            Send
+            {send.isPending ? "Sending…" : "Send"}
           </button>
         </div>
+        {send.isError && (
+          <p className="mt-2 text-xs text-red-600">Failed to send. Please try again.</p>
+        )}
       </div>
     </div>
   );

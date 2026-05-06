@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles, User, Send, X, MessageCircle } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { conversationChannel, NEW_MESSAGE_EVENT } from "@/lib/broadcast";
 import { cn, formatTime, getReadableTextColor } from "@/lib/utils";
+import { qk, useWidgetMessages, useWidgetSend } from "@/lib/queries";
 import type { ChatbotConfig, Message } from "@/lib/types";
 
 const VISITOR_KEY = "rt-chat-visitor-id";
@@ -34,13 +36,12 @@ export function WidgetApp({
   const fg = getReadableTextColor(config.primary_color);
   const [open, setOpen] = useState(embedded);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const [leadCaptured, setLeadCaptured] = useState(!config.collect_lead);
   const [lead, setLead] = useState<LeadInfo>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const visitorId = useRef<string>("");
+  const qc = useQueryClient();
 
   useEffect(() => {
     visitorId.current = getVisitorId();
@@ -48,40 +49,53 @@ export function WidgetApp({
     if (existing) setConversationId(existing);
   }, [tenantId]);
 
+  // Server messages — driven by TanStack Query
+  const messagesQuery = useWidgetMessages(conversationId);
+  const persistedMessages = messagesQuery.data?.messages ?? [];
+
+  // Optimistic queue — held outside RQ so we can reconcile on send.
+  const [pending, setPending] = useState<Message[]>([]);
+  const messages = useMemo(
+    () => mergeOptimistic(persistedMessages, pending),
+    [persistedMessages, pending],
+  );
+
+  // Realtime broadcast subscription — anon clients can't pass RLS, so we use broadcast.
   useEffect(() => {
     if (!conversationId) return;
     const supabase = createSupabaseBrowserClient();
-
-    (async () => {
-      const res = await fetch(`/api/widget/messages?conversationId=${conversationId}`);
-      if (res.ok) {
-        const data = (await res.json()) as { messages: Message[] };
-        setMessages(data.messages);
-      }
-    })();
-
-    // Anon clients can't pass RLS for postgres_changes, so we use broadcast.
     const channel = supabase
       .channel(conversationChannel(conversationId))
       .on("broadcast", { event: NEW_MESSAGE_EVENT }, (payload) => {
         const msg = payload.payload as Message;
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        // Append directly to RQ cache so all consumers see it.
+        qc.setQueryData<{ messages: Message[] }>(
+          qk.conversationMessages(conversationId),
+          (prev) => {
+            const list = prev?.messages ?? [];
+            if (list.some((m) => m.id === msg.id)) return prev ?? { messages: list };
+            return { messages: [...list, msg] };
+          },
+        );
+        // Drop any optimistic with matching content from the queue.
+        setPending((prev) => prev.filter((p) => p.content !== msg.content || p.sender !== msg.sender));
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversationId]);
+  }, [conversationId, qc]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, open]);
 
-  async function send() {
+  const sendMutation = useWidgetSend();
+
+  function send() {
     const content = draft.trim();
-    if (!content || sending) return;
-    setSending(true);
+    if (!content || sendMutation.isPending) return;
     setDraft("");
 
     const optimistic: Message = {
@@ -95,36 +109,38 @@ export function WidgetApp({
       metadata: {},
       created_at: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, optimistic]);
+    setPending((prev) => [...prev, optimistic]);
 
-    try {
-      const res = await fetch("/api/widget/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId,
-          visitorId: visitorId.current,
-          conversationId,
-          content,
-          lead: leadCaptured ? lead : undefined,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as { conversationId: string; message: Message };
-      if (!conversationId) {
-        setConversationId(data.conversationId);
-        localStorage.setItem(CONV_KEY(tenantId), data.conversationId);
-      }
-      // Swap optimistic with persisted message
-      setMessages((prev) =>
-        prev.map((m) => (m.id === optimistic.id ? data.message : m)),
-      );
-    } catch (err) {
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-      console.error(err);
-    } finally {
-      setSending(false);
-    }
+    sendMutation.mutate(
+      {
+        tenantId,
+        visitorId: visitorId.current,
+        conversationId,
+        content,
+        lead: leadCaptured ? lead : undefined,
+      },
+      {
+        onSuccess: (data) => {
+          if (!conversationId) {
+            setConversationId(data.conversationId);
+            localStorage.setItem(CONV_KEY(tenantId), data.conversationId);
+            // Seed cache for the new conversation so next render shows it.
+            qc.setQueryData(qk.conversationMessages(data.conversationId), { messages: [data.message] });
+          } else {
+            qc.setQueryData<{ messages: Message[] }>(
+              qk.conversationMessages(conversationId),
+              (prev) => {
+                const list = prev?.messages ?? [];
+                if (list.some((m) => m.id === data.message.id)) return prev ?? { messages: list };
+                return { messages: [...list, data.message] };
+              },
+            );
+          }
+          setPending((prev) => prev.filter((p) => p.id !== optimistic.id));
+        },
+        onError: () => setPending((prev) => prev.filter((p) => p.id !== optimistic.id)),
+      },
+    );
   }
 
   function submitLead(e: React.FormEvent) {
@@ -271,7 +287,7 @@ export function WidgetApp({
                 />
                 <button
                   onClick={send}
-                  disabled={!draft.trim() || sending}
+                  disabled={!draft.trim() || sendMutation.isPending}
                   className="flex items-center justify-center rounded-md px-3 disabled:opacity-60"
                   style={{ background: config.primary_color, color: fg }}
                 >
@@ -284,6 +300,15 @@ export function WidgetApp({
       )}
     </div>
   );
+}
+
+function mergeOptimistic(persisted: Message[], optimistic: Message[]) {
+  if (optimistic.length === 0) return persisted;
+  // Hide optimistic entries whose content already exists in persisted history.
+  const fresh = optimistic.filter(
+    (o) => !persisted.some((p) => p.content === o.content && p.sender === o.sender),
+  );
+  return [...persisted, ...fresh];
 }
 
 function Bubble({
