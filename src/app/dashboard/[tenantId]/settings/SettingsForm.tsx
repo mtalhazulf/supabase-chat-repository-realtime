@@ -1,0 +1,117 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import type { Tenant, TenantMember } from "@/lib/types";
+
+export function SettingsForm({
+  tenant,
+  members,
+  currentUserId,
+}: {
+  tenant: Tenant;
+  members: TenantMember[];
+  currentUserId: string | null;
+}) {
+  const router = useRouter();
+  const [name, setName] = useState(tenant.name);
+  const [slug, setSlug] = useState(tenant.slug);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const isOwner = tenant.owner_id === currentUserId;
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setInfo(null);
+    const supabase = createSupabaseBrowserClient();
+    const { error } = await supabase
+      .from("tenants")
+      .update({ name, slug })
+      .eq("id", tenant.id);
+    setSaving(false);
+    if (error) return setError(error.message);
+    setInfo("Saved.");
+    router.refresh();
+  }
+
+  async function remove() {
+    if (!confirm("Delete this workspace? This cannot be undone.")) return;
+    const supabase = createSupabaseBrowserClient();
+    const { error } = await supabase.from("tenants").delete().eq("id", tenant.id);
+    if (error) return setError(error.message);
+    router.replace("/dashboard");
+    router.refresh();
+  }
+
+  return (
+    <div className="space-y-8">
+      <form onSubmit={save} className="grid gap-3 rounded-lg border border-gray-200 p-4 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-gray-700">Workspace name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            disabled={!isOwner}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-gray-700">Slug</span>
+          <input
+            value={slug}
+            onChange={(e) =>
+              setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+            }
+            className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm"
+            disabled={!isOwner}
+          />
+        </label>
+        <div className="sm:col-span-2 flex items-center gap-3">
+          <button
+            type="submit"
+            disabled={saving || !isOwner}
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {info && <span className="text-xs text-emerald-600">{info}</span>}
+          {error && <span className="text-xs text-red-600">{error}</span>}
+        </div>
+      </form>
+
+      <div className="rounded-lg border border-gray-200 p-4">
+        <h3 className="text-sm font-semibold text-gray-900">Members</h3>
+        <ul className="mt-3 divide-y divide-gray-200">
+          {members.map((m) => (
+            <li key={m.user_id} className="flex items-center justify-between py-2 text-sm">
+              <span className="font-mono text-xs text-gray-500">{m.user_id.slice(0, 8)}…</span>
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs">{m.role}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-xs text-gray-500">
+          Member invitations require server-side email logic — wire to your email provider when ready.
+        </p>
+      </div>
+
+      {isOwner && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+          <h3 className="text-sm font-semibold text-red-900">Danger zone</h3>
+          <p className="mt-1 text-xs text-red-800">Deleting removes all conversations and messages.</p>
+          <button
+            type="button"
+            onClick={remove}
+            className="mt-3 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+          >
+            Delete workspace
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
