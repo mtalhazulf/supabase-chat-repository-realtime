@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import type { Tenant, TenantMember } from "@/lib/types";
 
 export function SettingsForm({
@@ -28,22 +27,28 @@ export function SettingsForm({
     setSaving(true);
     setError(null);
     setInfo(null);
-    const supabase = createSupabaseBrowserClient();
-    const { error } = await supabase
-      .from("tenants")
-      .update({ name, slug })
-      .eq("id", tenant.id);
+
+    const res = await fetch(`/api/tenants/${tenant.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, slug }),
+    });
     setSaving(false);
-    if (error) return setError(error.message);
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      return setError(data.error === "slug_taken" ? "That slug is already in use." : "Could not save.");
+    }
     setInfo("Saved.");
     router.refresh();
   }
 
   async function remove() {
     if (!confirm("Delete this workspace? This cannot be undone.")) return;
-    const supabase = createSupabaseBrowserClient();
-    const { error } = await supabase.from("tenants").delete().eq("id", tenant.id);
-    if (error) return setError(error.message);
+    const res = await fetch(`/api/tenants/${tenant.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      return setError(data.error ?? "Could not delete.");
+    }
     router.replace("/dashboard");
     router.refresh();
   }

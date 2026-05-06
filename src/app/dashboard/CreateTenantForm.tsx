@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import type { Tenant } from "@/lib/types";
 
 export function CreateTenantForm() {
   const router = useRouter();
@@ -22,23 +22,23 @@ export function CreateTenantForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const supabase = createSupabaseBrowserClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return setError("Not signed in.");
-
     const finalSlug = slug || deriveSlug(name);
-    const { data, error } = await supabase
-      .from("tenants")
-      .insert({ name, slug: finalSlug, owner_id: user.id })
-      .select()
-      .single();
 
-    if (error) return setError(error.message);
+    const res = await fetch("/api/tenants", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, slug: finalSlug }),
+    });
+
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(humanizeError(data.error));
+      return;
+    }
+    const { tenant } = (await res.json()) as { tenant: Tenant };
 
     startTransition(() => {
-      router.push(`/dashboard/${data.id}/conversations`);
+      router.push(`/dashboard/${tenant.id}/conversations`);
       router.refresh();
     });
   }
@@ -72,4 +72,17 @@ export function CreateTenantForm() {
       {error && <p className="sm:col-span-3 text-sm text-red-600">{error}</p>}
     </form>
   );
+}
+
+function humanizeError(code?: string) {
+  switch (code) {
+    case "slug_taken":
+      return "That slug is already in use. Try another.";
+    case "unauthorized":
+      return "You need to sign in.";
+    case "invalid_body":
+      return "Name or slug is invalid.";
+    default:
+      return "Could not create the workspace.";
+  }
 }

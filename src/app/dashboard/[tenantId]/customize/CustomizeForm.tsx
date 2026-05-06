@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Sparkles, User } from "lucide-react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { cn, getReadableTextColor } from "@/lib/utils";
 import type { ChatbotConfig } from "@/lib/types";
 
@@ -29,15 +28,18 @@ export function CustomizeForm({ initial }: { initial: ChatbotConfig }) {
     e.preventDefault();
     setSaving(true);
     setError(null);
-    const supabase = createSupabaseBrowserClient();
     const { tenant_id, updated_at, ...patch } = config;
-    const { error } = await supabase
-      .from("chatbot_configs")
-      .update(patch)
-      .eq("tenant_id", tenant_id);
+    void updated_at;
+
+    const res = await fetch(`/api/tenants/${tenant_id}/config`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
     setSaving(false);
-    if (error) {
-      setError(error.message);
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(data.error ?? "Could not save changes.");
       return;
     }
     setSavedAt(new Date());
